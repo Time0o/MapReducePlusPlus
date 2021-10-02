@@ -10,7 +10,7 @@ find_package(Protobuf REQUIRED)
 find_package(gRPC CONFIG REQUIRED)
 
 # directry structure
-set(SRC_DIR "${CMAKE_SOURCE_DIR}")
+set(SRC_DIR "${CMAKE_SOURCE_DIR}/src")
 
 set(PROTO_DIR "${CMAKE_SOURCE_DIR}/proto")
 set(PROTO_OUT_DIR "${PROTO_DIR}/out")
