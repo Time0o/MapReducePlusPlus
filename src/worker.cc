@@ -27,6 +27,9 @@ public:
   : _master(Master::NewStub(channel))
   {}
 
+  int32_t id() const
+  { return _id; }
+
   bool run()
   {
     try {
@@ -35,7 +38,7 @@ public:
       loop();
 
     } catch (std::runtime_error const &e) {
-      spdlog::error("worker {}: shutting down: {}", _id, e.what());
+      spdlog::error("worker {}: shutting down: {}", id(), e.what());
 
       return false;
     }
@@ -50,28 +53,28 @@ private:
 
     _id = config.id();
 
-    spdlog::info("worker {}: initialized", _id);
+    spdlog::info("worker {}: initialized", id());
   }
 
   void loop() const
   {
     for (;;) {
-      auto task = get_task();
+      auto command = get_command();
 
-      switch (task.kind()) {
-        case WorkerTask::IDLE:
+      switch (command.kind()) {
+        case WorkerCommand::IDLE:
           break;
-        case WorkerTask::MAP:
-          spdlog::info("worker {}: mapping task: {}", _id, task.file()); // XXX
+        case WorkerCommand::MAP:
+          spdlog::info("worker {}: mapping file: {}", id(), command.file()); // XXX
           break;
-        case WorkerTask::REDUCE:
-          spdlog::info("worker {}: reducing", _id); // XXX
+        case WorkerCommand::REDUCE:
+          spdlog::info("worker {}: reducing", id()); // XXX
           break;
-        case WorkerTask::QUIT:
-          spdlog::info("worker {}: done", _id);
+        case WorkerCommand::QUIT:
+          spdlog::info("worker {}: done", id());
           return;
         default:
-          throw std::runtime_error("unexpected task kind");
+          throw std::runtime_error("unexpected command");
       }
 
       sleep();
@@ -85,10 +88,15 @@ private:
   }
 
   WorkerConfig get_config() const
-  { return rpc<WorkerConfig>("get config", &Master::Stub::GetWorkerConfig); }
+  { return rpc<WorkerConfig>("get config", &Master::Stub::GetConfig); }
 
-  WorkerTask get_task() const
-  { return rpc<WorkerTask>("get task", &Master::Stub::GetWorkerTask); }
+  WorkerCommand get_command() const
+  {
+    WorkerInfo worker_info;
+    worker_info.set_id(id());
+
+    return rpc<WorkerCommand>("get command", &Master::Stub::GetCommand, worker_info);
+  }
 
   template<typename RET, typename FUNC, typename ...ARGS>
   RET rpc(std::string const &what, FUNC &&func, ARGS &&...args) const

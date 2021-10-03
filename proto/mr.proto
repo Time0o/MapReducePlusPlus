@@ -8,7 +8,11 @@ message WorkerConfig {
   int32 id = 1;
 }
 
-message WorkerTask {
+message WorkerInfo {
+  int32 id = 1;
+}
+
+message WorkerCommand {
   enum Kind {
     IDLE = 0;
     MAP = 1;
@@ -22,6 +26,6 @@ message WorkerTask {
 }
 
 service Master {
-  rpc GetWorkerConfig(Empty) returns (WorkerConfig);
-  rpc GetWorkerTask(Empty) returns (WorkerTask);
+  rpc GetConfig(Empty) returns (WorkerConfig);
+  rpc GetCommand(WorkerInfo) returns (WorkerCommand);
 }
