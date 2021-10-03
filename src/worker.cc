@@ -6,6 +6,7 @@
 #include <stdexcept>
 #include <string>
 #include <thread>
+#include <utility>
 
 #include <grpc/grpc.h>
 #include <grpcpp/create_channel.h>
@@ -14,28 +15,6 @@
 #include "mr.grpc.pb.h"
 
 using namespace std::literals::chrono_literals;
-
-namespace
-{
-
-void CheckRPC(grpc::Status const &status, std::string const &msg)
-{
-  if (!status.ok())
-  {
-    auto error_code = status.error_code();
-    auto error_message = status.error_message();
-
-    std::stringstream ss;
-    ss << msg << ": status code " << error_code;
-
-    if (!error_message.empty())
-      ss << " (" << error_message << ")";
-
-    throw std::runtime_error(ss.str());
-  }
-}
-
-} // end namespace
 
 namespace mr
 {
@@ -105,27 +84,46 @@ private:
   }
 
   WorkerConfig get_config() const
-  {
-    grpc::ClientContext context;
-
-    Empty empty;
-    WorkerConfig config;
-    CheckRPC(_master->GetWorkerConfig(&context, empty, &config),
-             "failed to get config");
-
-    return config;
-  }
+  { return rpc<WorkerConfig>("get config", &Master::Stub::GetWorkerConfig); }
 
   WorkerTask get_task() const
+  { return rpc<WorkerTask>("get task", &Master::Stub::GetWorkerTask); }
+
+  template<typename RET, typename FUNC, typename ...ARGS>
+  RET rpc(std::string const &what, FUNC &&func, ARGS &&...args) const
   {
     grpc::ClientContext context;
 
-    Empty empty;
-    WorkerTask task;
-    CheckRPC(_master->GetWorkerTask(&context, empty, &task),
-             "failed to get task");
+    RET ret;
+    auto status = ((*_master).*func)(&context, std::forward<ARGS>(args)..., &ret);
 
-    return task;
+    check_rpc(what, status);
+
+    return ret;
+  }
+
+  template<typename RET, typename FUNC>
+  RET rpc(std::string const &what, FUNC &&func) const
+  {
+    Empty empty;
+    return rpc<RET>(what, std::forward<FUNC>(func), empty);
+  }
+
+  static void check_rpc(std::string const &what, grpc::Status const &status)
+  {
+    if (!status.ok())
+    {
+      auto error_code = status.error_code();
+      auto error_message = status.error_message();
+
+      std::stringstream ss;
+      ss << "failed to " << what << ": status code " << error_code;
+
+      if (!error_message.empty())
+        ss << " (" << error_message << ")";
+
+      throw std::runtime_error(ss.str());
+    }
   }
 
   std::unique_ptr<Master::Stub> _master;
