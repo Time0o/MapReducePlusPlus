@@ -129,7 +129,7 @@ private:
 
   std::unique_ptr<Master::Stub> _master;
 
-  uint32_t _id = 0u;
+  int32_t _id = 0;
 };
 
 } // end namespace mr

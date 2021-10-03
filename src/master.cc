@@ -32,7 +32,7 @@ public:
   }
 
 private:
-  uint32_t _workers = 0u;
+  int32_t _workers = 0;
 };
 
 } // end namespace hello
