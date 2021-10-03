@@ -2,12 +2,6 @@ syntax = "proto3";
 
 package mr;
 
-message Empty {}
-
-message WorkerConfig {
-  int32 id = 1;
-}
-
 message WorkerInfo {
   int32 id = 1;
 }
@@ -22,10 +16,35 @@ message WorkerCommand {
 
   Kind kind = 1;
 
-  optional string file = 2;
+  optional int32 task_id = 2;
+  optional string task_file = 3;
+}
+
+message GetConfigRequest {
+}
+
+message GetConfigResponse {
+  WorkerInfo worker_info = 1;
+}
+
+message GetCommandRequest {
+  WorkerInfo worker_info = 1;
+}
+
+message GetCommandResponse {
+  WorkerCommand worker_command = 1;
+}
+
+message FinishCommandRequest {
+  WorkerInfo worker_info = 1;
+  WorkerCommand worker_command = 2;
+}
+
+message FinishCommandResponse {
 }
 
 service Master {
-  rpc GetConfig(Empty) returns (WorkerConfig);
-  rpc GetCommand(WorkerInfo) returns (WorkerCommand);
+  rpc GetConfig(GetConfigRequest) returns (GetConfigResponse);
+  rpc GetCommand(GetCommandRequest) returns (GetCommandResponse);
+  rpc FinishCommand(FinishCommandRequest) returns (FinishCommandResponse);
 }

@@ -25,10 +25,10 @@ class Worker
 public:
   Worker(std::shared_ptr<grpc::ChannelInterface> channel)
   : _master(Master::NewStub(channel))
-  {}
+  { _info.set_id(0); }
 
   int32_t id() const
-  { return _id; }
+  { return _info.id(); }
 
   bool run()
   {
@@ -51,7 +51,7 @@ private:
   {
     auto config = get_config();
 
-    _id = config.id();
+    _info.set_id(config.id());
 
     spdlog::info("worker {}: initialized", id());
   }
@@ -65,8 +65,9 @@ private:
         case WorkerCommand::IDLE:
           break;
         case WorkerCommand::MAP:
-          spdlog::info("worker {}: mapping file: {}", id(), command.file()); // XXX
-          break;
+          spdlog::info("worker {}: mapping file: {}", id(), command.task_file());
+          finish_command(command);
+          continue;
         case WorkerCommand::REDUCE:
           spdlog::info("worker {}: reducing", id()); // XXX
           break;
@@ -87,57 +88,72 @@ private:
       std::chrono::milliseconds(CONFIG_WORKER_SLEEP_FOR));
   }
 
-  WorkerConfig get_config() const
-  { return rpc<WorkerConfig>("get config", &Master::Stub::GetConfig); }
+  WorkerInfo get_config() const
+  {
+    GetConfigRequest request;
+
+    GetConfigResponse response;
+    rpc("get config", &Master::Stub::GetConfig, request, &response);
+
+    return response.worker_info();
+  }
 
   WorkerCommand get_command() const
   {
-    WorkerInfo worker_info;
-    worker_info.set_id(id());
+    GetCommandRequest request;
+    *request.mutable_worker_info() = _info;
 
-    return rpc<WorkerCommand>("get command", &Master::Stub::GetCommand, worker_info);
+    GetCommandResponse response;
+
+    rpc("get command", &Master::Stub::GetCommand, request, &response);
+
+    return response.worker_command();
   }
 
-  template<typename RET, typename FUNC, typename ...ARGS>
-  RET rpc(std::string const &what, FUNC &&func, ARGS &&...args) const
+  void finish_command(WorkerCommand const &command) const
+  {
+    FinishCommandRequest request;
+    *request.mutable_worker_info() = _info;
+    *request.mutable_worker_command() = command;
+
+    FinishCommandResponse response;
+
+    rpc("finish command", &Master::Stub::FinishCommand, request, &response);
+  }
+
+  template<typename FUNC, typename REQUEST, typename RESPONSE>
+  void rpc(std::string const &what,
+           FUNC &&func,
+           REQUEST const &request,
+           RESPONSE *response) const
   {
     grpc::ClientContext context;
 
-    RET ret;
-    auto status = ((*_master).*func)(&context, std::forward<ARGS>(args)..., &ret);
+    auto status = ((*_master).*func)(&context, request, response);
 
     check_rpc(what, status);
-
-    return ret;
-  }
-
-  template<typename RET, typename FUNC>
-  RET rpc(std::string const &what, FUNC &&func) const
-  {
-    Empty empty;
-    return rpc<RET>(what, std::forward<FUNC>(func), empty);
   }
 
   static void check_rpc(std::string const &what, grpc::Status const &status)
   {
-    if (!status.ok())
-    {
-      auto error_code = status.error_code();
-      auto error_message = status.error_message();
+    if (status.ok())
+      return;
 
-      std::stringstream ss;
-      ss << "failed to " << what << ": status code " << error_code;
+    auto error_code = status.error_code();
+    auto error_message = status.error_message();
 
-      if (!error_message.empty())
-        ss << " (" << error_message << ")";
+    std::stringstream ss;
+    ss << "failed to " << what << ": status code " << error_code;
 
-      throw std::runtime_error(ss.str());
-    }
+    if (!error_message.empty())
+      ss << " (" << error_message << ")";
+
+    throw std::runtime_error(ss.str());
   }
 
   std::unique_ptr<Master::Stub> _master;
 
-  int32_t _id = 0;
+  WorkerInfo _info;
 };
 
 } // end namespace mr

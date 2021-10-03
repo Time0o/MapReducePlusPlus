@@ -2,6 +2,7 @@
 #include <cstdlib>
 #include <iostream>
 #include <memory>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -40,39 +41,83 @@ class MasterImpl : public Master::Service
   };
 
 public:
-  MasterImpl(std::vector<std::string> const &files)
+  MasterImpl(std::vector<std::string> const &task_files)
   {
-    for (auto const &file : files) {
-      int32_t id = static_cast<int32_t>(_tasks.size()) + 1;
+    for (auto const &task_file : task_files) {
+      int32_t task_id = _tasks.size() + 1;
 
-      _tasks.emplace_back(id, file);
+      _tasks.emplace_back(task_id, task_file);
     }
   }
 
   grpc::Status GetConfig(grpc::ServerContext *context,
-                         Empty const *empty,
-                         WorkerConfig *worker_config)
+                         GetConfigRequest const *request,
+                         GetConfigResponse *response)
   {
-    worker_config->set_id(++_workers);
+    (void)request;
+
+    auto worker_id = ++_workers;
+
+    spdlog::info("master: configuring worker {}", worker_id);
+
+    response->mutable_worker_info()->set_id(worker_id);
 
     return grpc::Status::OK;
   }
 
   grpc::Status GetCommand(grpc::ServerContext *context,
-                          WorkerInfo const *worker_info,
-                          WorkerCommand *worker_command)
+                          GetCommandRequest const *request,
+                          GetCommandResponse *response)
   {
+    auto const &worker_info = request->worker_info();
+
+    auto worker_id = worker_info.id();
+
+    auto worker_command = next_worker_command(worker_id);
+
+    spdlog::info("master: sending command {} to worker {}",
+                 describe_worker_command(worker_command), worker_id);
+
+    *response->mutable_worker_command() = worker_command;
+
+    return grpc::Status::OK;
+  }
+
+  grpc::Status FinishCommand(grpc::ServerContext *context,
+                             FinishCommandRequest const *request,
+                             FinishCommandResponse *response)
+  {
+    auto const &worker_info = request->worker_info();
+    auto const &worker_command = request->worker_command();
+
+    auto worker_id = worker_info.id();
+    auto task_id = worker_command.task_id();
+
+    spdlog::info("master: task {} finished by worker {}", task_id, worker_id);
+
+    auto &task = _tasks[task_id - 1];
+
+    task.worker = 0;
+    task.status = Task::DONE;
+
+    return grpc::Status::OK;
+  }
+
+private:
+  WorkerCommand next_worker_command(int32_t worker_id)
+  {
+    WorkerCommand worker_command;
+
     bool done = true;
 
     for (auto &task : _tasks) {
       if (task.status == Task::TODO) {
-        spdlog::info("master: starting task {} on worker {}", task.id, worker_info->id());
-
-        task.worker = worker_info->id();
+        task.worker = worker_id;
         task.status = Task::DOING;
 
-        worker_command->set_kind(WorkerCommand::MAP); // XXX
-        worker_command->set_file(task.file); // XXX
+        worker_command.set_kind(WorkerCommand::MAP);
+        worker_command.set_task_id(task.id);
+        worker_command.set_task_file(task.file);
 
         done = false;
 
@@ -80,16 +125,38 @@ public:
       }
     }
 
-    if (done) {
-      spdlog::info("master: quitting worker {}", worker_info->id());
+    if (done)
+      worker_command.set_kind(WorkerCommand::QUIT);
 
-      worker_command->set_kind(WorkerCommand::QUIT); // XXX
-    }
-
-    return grpc::Status::OK;
+    return worker_command;
   }
 
-private:
+  std::string describe_worker_command(WorkerCommand const &worker_command)
+  {
+    std::stringstream ss;
+
+    switch (worker_command.kind()) {
+      case WorkerCommand::IDLE:
+        ss << "IDLE";
+        break;
+      case WorkerCommand::MAP:
+        ss << "MAP [task " << worker_command.task_id() << ", '"
+                           << worker_command.task_file() << "']";
+        break;
+      case WorkerCommand::REDUCE:
+        ss << "REDUCE"; // XXX
+        break;
+      case WorkerCommand::QUIT:
+        ss << "QUIT";
+        break;
+      default:
+        ss << "???";
+        break;
+    }
+
+    return ss.str();
+  }
+
   int32_t _workers = 0;
   std::vector<Task> _tasks;
 };
