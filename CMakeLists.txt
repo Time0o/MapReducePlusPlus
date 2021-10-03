@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.12)
 
-project(Hello LANGUAGES CXX)
+project(MapReduce LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Werror")
@@ -14,18 +14,24 @@ set(SRC_DIR "${CMAKE_SOURCE_DIR}/src")
 
 set(PROTO_DIR "${CMAKE_SOURCE_DIR}/proto")
 set(PROTO_OUT_DIR "${PROTO_DIR}/out")
-set(PROTO_FILE "${PROTO_DIR}/hello.proto")
-set(GRPC_SRC "${PROTO_OUT_DIR}/hello.grpc.pb.cc")
-set(GRPC_HDR "${PROTO_OUT_DIR}/hello.grpc.pb.h")
-set(PROTO_SRC "${PROTO_OUT_DIR}/hello.pb.cc")
-set(PROTO_HDR "${PROTO_OUT_DIR}/hello.pb.h")
+set(PROTO_FILE "${PROTO_DIR}/mr.proto")
+set(GRPC_SRC "${PROTO_OUT_DIR}/mr.grpc.pb.cc")
+set(GRPC_HDR "${PROTO_OUT_DIR}/mr.grpc.pb.h")
+set(PROTO_SRC "${PROTO_OUT_DIR}/mr.pb.cc")
+set(PROTO_HDR "${PROTO_OUT_DIR}/mr.pb.h")
 
-# communication channel
-if (NOT DEFINED CHANNEL)
-  set(CHANNEL "localhost:50051")
+# configuration
+if (NOT DEFINED CONFIG_MASTER_SOCKET)
+  set(CONFIG_MASTER_SOCKET "localhost:50051")
 endif()
 
-add_compile_definitions(CHANNEL="${CHANNEL}")
+if (NOT DEFINED CONFIG_WORKER_SLEEP_FOR)
+  set(CONFIG_WORKER_SLEEP_FOR "100ms")
+endif()
+
+add_compile_definitions(
+  CONFIG_MASTER_SOCKET="${CONFIG_MASTER_SOCKET}"
+  CONFIG_WORKER_SLEEP_FOR=${CONFIG_WORKER_SLEEP_FOR})
 
 # grpc/protobuf library
 set(PROTOC $<TARGET_FILE:protobuf::protoc>)
@@ -57,11 +63,8 @@ target_link_libraries("${PROTO_LIB}"
 
 target_include_directories("${PROTO_LIB}" PRIVATE "${PROTO_OUT_DIR}")
 
-# server/client binaries
-set(SERVER_BIN server)
-set(CLIENT_BIN client)
-
-foreach (bin "${SERVER_BIN}" "${CLIENT_BIN}")
+# master/worker binaries
+foreach (bin master worker)
   add_executable("${bin}" "${SRC_DIR}/${bin}.cc")
 
   target_include_directories("${bin}" PRIVATE "${PROTO_OUT_DIR}")

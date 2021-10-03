@@ -1,0 +1,27 @@
+syntax = "proto3";
+
+package mr;
+
+message Empty {}
+
+message WorkerConfig {
+  int32 id = 1;
+}
+
+message WorkerTask {
+  enum Kind {
+    IDLE = 0;
+    MAP = 1;
+    REDUCE = 2;
+    QUIT = 3;
+  }
+
+  Kind kind = 1;
+
+  optional string file = 2;
+}
+
+service Master {
+  rpc GetWorkerConfig(Empty) returns (WorkerConfig);
+  rpc GetWorkerTask(Empty) returns (WorkerTask);
+}
