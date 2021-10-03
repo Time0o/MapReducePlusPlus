@@ -11,6 +11,7 @@
 #include <grpc/grpc.h>
 #include <grpcpp/create_channel.h>
 #include <grpcpp/security/credentials.h>
+#include <spdlog/spdlog.h>
 
 #include "mr.grpc.pb.h"
 
@@ -34,7 +35,7 @@ public:
       loop();
 
     } catch (std::runtime_error const &e) {
-      std::cerr << "worker " << _id << ": shutting down: " << e.what() << std::endl;
+      spdlog::error("worker {}: shutting down: {}", _id, e.what());
 
       return false;
     }
@@ -49,7 +50,7 @@ private:
 
     _id = config.id();
 
-    std::cout << "worker " << _id << ": initialized" << std::endl;
+    spdlog::info("worker {}: initialized", _id);
   }
 
   void loop() const
@@ -61,13 +62,13 @@ private:
         case WorkerTask::IDLE:
           break;
         case WorkerTask::MAP:
-          std::cout << "worker " << _id << ": mapping task '" << task.file() << "'" << std::endl; // XXX
+          spdlog::info("worker {}: mapping task: {}", _id, task.file()); // XXX
           break;
         case WorkerTask::REDUCE:
-          std::cout << "worker " << _id << ": reducing" << std::endl; // XXX
+          spdlog::info("worker {}: reducing", _id); // XXX
           break;
         case WorkerTask::QUIT:
-          std::cout << "worker " << _id << ": done" << std::endl;
+          spdlog::info("worker {}: done", _id);
           return;
         default:
           throw std::runtime_error("unexpected task kind");
