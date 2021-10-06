@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.12)
 
 project(MapReduce LANGUAGES CXX)
 
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Werror")
 
 # packages
@@ -12,6 +12,7 @@ find_package(spdlog CONFIG REQUIRED)
 
 # directry structure
 set(SRC_DIR "${CMAKE_SOURCE_DIR}/src")
+set(INCLUDE_DIR "${CMAKE_SOURCE_DIR}/include")
 
 set(PROTO_DIR "${CMAKE_SOURCE_DIR}/proto")
 set(PROTO_OUT_DIR "${PROTO_DIR}/out")
@@ -68,7 +69,7 @@ target_include_directories("${PROTO_LIB}" PRIVATE "${PROTO_OUT_DIR}")
 foreach (bin master worker)
   add_executable("${bin}" "${SRC_DIR}/${bin}.cc")
 
-  target_include_directories("${bin}" PRIVATE "${PROTO_OUT_DIR}")
+  target_include_directories("${bin}" PRIVATE "${INCLUDE_DIR}" "${PROTO_OUT_DIR}")
 
   target_link_libraries("${bin}"
     "${PROTO_LIB}"
