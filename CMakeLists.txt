@@ -35,6 +35,26 @@ add_compile_definitions(
   CONFIG_MASTER_SOCKET="${CONFIG_MASTER_SOCKET}"
   CONFIG_WORKER_SLEEP_FOR=${CONFIG_WORKER_SLEEP_FOR})
 
+# map/reduce parameters
+if (NOT MR_IMPL)
+  message(FATAL_ERROR "-DMR_IMPL is required")
+endif()
+
+# XXX specify number of tasks / file prefix for map as well
+
+if (NOT MR_REDUCE_NUM_TASKS)
+  message(FATAL_ERROR "-DMR_REDUCE_NUM_TASKS is required")
+endif()
+
+if (NOT MR_REDUCE_FILE_PREFIX)
+  set(MR_REDUCE_FILE_PREFIX "reduce")
+endif()
+
+add_compile_definitions(
+  MR_IMPL="${MR_IMPL}"
+  MR_REDUCE_NUM_TASKS=${MR_REDUCE_NUM_TASKS}
+  MR_REDUCE_FILE_PREFIX="${MR_REDUCE_FILE_PREFIX}")
+
 # grpc/protobuf library
 set(PROTOC $<TARGET_FILE:protobuf::protoc>)
 set(GRPC_CPP_PLUGIN $<TARGET_FILE:gRPC::grpc_cpp_plugin>)
@@ -77,3 +97,5 @@ foreach (bin master worker)
     "gRPC::grpc++"
     "gRPC::grpc++_reflection")
 endforeach()
+
+target_compile_options(worker PRIVATE -include "${MR_IMPL}")

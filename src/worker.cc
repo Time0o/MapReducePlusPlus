@@ -1,5 +1,8 @@
 #include <chrono>
+#include <cstdio>
 #include <cstdlib>
+#include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <memory>
 #include <sstream>
@@ -7,15 +10,21 @@
 #include <string>
 #include <thread>
 #include <utility>
+#include <vector>
 
 #include <grpc/grpc.h>
 #include <grpcpp/create_channel.h>
 #include <grpcpp/security/credentials.h>
 #include <spdlog/spdlog.h>
 
+#include "generator.h"
+#include "key_value.h"
+
 #include "mr.grpc.pb.h"
 
 using namespace std::literals::chrono_literals;
+
+namespace fs = std::filesystem;
 
 namespace mr
 {
@@ -26,9 +35,6 @@ public:
   Worker(std::shared_ptr<grpc::ChannelInterface> channel)
   : _master(Master::NewStub(channel))
   { _info.set_id(0); }
-
-  int32_t id() const
-  { return _info.id(); }
 
   bool run()
   {
@@ -49,9 +55,7 @@ public:
 private:
   void init()
   {
-    auto config = get_config();
-
-    _info.set_id(config.id());
+    _info = get_config();
 
     spdlog::info("worker {}: initialized", id());
   }
@@ -65,9 +69,12 @@ private:
         case WorkerCommand::IDLE:
           break;
         case WorkerCommand::MAP:
-          spdlog::info("worker {}: mapping file: {}", id(), command.task_file());
-          finish_command(command);
-          continue;
+          {
+            map_command(command);
+            finish_command(command);
+
+            continue;
+          }
         case WorkerCommand::REDUCE:
           spdlog::info("worker {}: reducing", id()); // XXX
           break;
@@ -88,6 +95,98 @@ private:
       std::chrono::milliseconds(CONFIG_WORKER_SLEEP_FOR));
   }
 
+  // XXX error handling
+  void map_command(WorkerCommand const &command) const
+  {
+    auto map_task { command.task_id() };
+    auto map_file { command.task_file() };
+
+    spdlog::info("worker {}: mapping file: {}", id(), map_file);
+
+    // run map function
+    std::ifstream map_stream(map_file);
+
+    auto map_gen { map(map_file, map_stream) };
+
+    // create temporary directory
+    fs::path tmp_dir;
+
+    for (;;) {
+      // XXX don't use tmpnam
+      tmp_dir = fs::temp_directory_path() / std::tmpnam(nullptr);
+
+      try {
+        fs::create_directories(tmp_dir);
+        break;
+
+      } catch (fs::filesystem_error& e) {
+        spdlog::warn("worker {}: failed to create temporary directory: {}", id(), e.what());
+      }
+    }
+
+    std::vector<fs::path> reduce_paths;
+    std::vector<fs::path> reduce_tmp_paths;
+    std::vector<std::ofstream> reduce_tmp_streams;
+
+    reduce_paths.reserve(reduce_num_tasks());
+    reduce_tmp_paths.reserve(reduce_num_tasks());
+    reduce_tmp_streams.reserve(reduce_num_tasks());
+
+    // create temporary reduce files
+    for (int32_t reduce_task = 1; reduce_task <= reduce_num_tasks(); ++reduce_task) {
+      fs::path reduce_path { fmt::format(
+        "{}_{}_{}.mr", reduce_file_prefix(), map_task, reduce_task) };
+
+      fs::path reduce_tmp_path { tmp_dir / reduce_path };
+
+      reduce_paths.push_back(reduce_path);
+      reduce_tmp_paths.push_back(reduce_tmp_path);
+      reduce_tmp_streams.emplace_back(reduce_tmp_path);
+    }
+
+    // write to temporary reduce files
+
+    // XXX properly iterate over generator
+    while (map_gen.next()) {
+      auto kv { map_gen.value() };
+
+      std::hash<decltype(kv.key)> hasher;
+      int32_t reduce_task = hasher(kv.key) % reduce_num_tasks() + 1;
+
+      reduce_tmp_streams[reduce_task - 1] << kv.key << ' ' << kv.value << '\n';
+    }
+
+    // rename temporary reduce files
+    for (int32_t reduce_task = 1; reduce_task <= reduce_num_tasks(); ++reduce_task) {
+      auto const &old_path = reduce_tmp_paths[reduce_task - 1];
+      auto const &new_path = reduce_paths[reduce_task - 1];
+
+      reduce_tmp_streams[reduce_task - 1].flush();
+
+      try {
+        fs::rename(old_path, new_path);
+
+      } catch (fs::filesystem_error &) {
+        auto copy_options = fs::copy_options::overwrite_existing;
+        fs::copy(old_path, new_path, copy_options);
+
+        fs::remove(old_path);
+      }
+    }
+
+    // remove temporary directory
+    fs::remove(tmp_dir);
+  }
+
+  int32_t id() const
+  { return _info.id(); }
+
+  int32_t reduce_num_tasks() const
+  { return _info.reduce_num_tasks(); }
+
+  std::string reduce_file_prefix() const
+  { return _info.reduce_file_prefix(); }
+
   WorkerInfo get_config() const
   {
     GetConfigRequest request;
@@ -104,7 +203,6 @@ private:
     *request.mutable_worker_info() = _info;
 
     GetCommandResponse response;
-
     rpc("get command", &Master::Stub::GetCommand, request, &response);
 
     return response.worker_command();
@@ -117,7 +215,6 @@ private:
     *request.mutable_worker_command() = command;
 
     FinishCommandResponse response;
-
     rpc("finish command", &Master::Stub::FinishCommand, request, &response);
   }
 

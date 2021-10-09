@@ -4,6 +4,9 @@ package mr;
 
 message WorkerInfo {
   int32 id = 1;
+
+  int32 reduce_num_tasks = 2;
+  string reduce_file_prefix = 3;
 }
 
 message WorkerCommand {

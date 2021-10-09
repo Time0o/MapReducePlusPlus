@@ -51,16 +51,16 @@ public:
   }
 
   grpc::Status GetConfig(grpc::ServerContext *context,
-                         GetConfigRequest const *request,
+                         GetConfigRequest const *,
                          GetConfigResponse *response)
   {
-    (void)request;
-
     auto worker_id = ++_workers;
+
+    auto worker_info = get_worker_info(worker_id);
 
     spdlog::info("master: configuring worker {}", worker_id);
 
-    response->mutable_worker_info()->set_id(worker_id);
+    *response->mutable_worker_info() = worker_info;
 
     return grpc::Status::OK;
   }
@@ -73,7 +73,7 @@ public:
 
     auto worker_id = worker_info.id();
 
-    auto worker_command = next_worker_command(worker_id);
+    auto worker_command = get_worker_command(worker_id);
 
     spdlog::info("master: sending command {} to worker {}",
                  describe_worker_command(worker_command), worker_id);
@@ -104,7 +104,19 @@ public:
   }
 
 private:
-  WorkerCommand next_worker_command(int32_t worker_id)
+  static WorkerInfo get_worker_info(int32_t worker_id)
+  {
+    WorkerInfo worker_info;
+
+    worker_info.set_id(worker_id);
+
+    worker_info.set_reduce_num_tasks(MR_REDUCE_NUM_TASKS);
+    worker_info.set_reduce_file_prefix(MR_REDUCE_FILE_PREFIX);
+
+    return worker_info;
+  }
+
+  WorkerCommand get_worker_command(int32_t worker_id)
   {
     WorkerCommand worker_command;
 
