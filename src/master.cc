@@ -1,7 +1,9 @@
+#include <cassert>
 #include <chrono>
 #include <cstdlib>
 #include <iostream>
 #include <memory>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -26,7 +28,7 @@ class MasterImpl : public Master::Service
       DONE,
     };
 
-    Task(int32_t id, std::string const &file)
+    Task(int32_t id, std::optional<std::string> const &file = std::nullopt)
     : id(id),
       file(file),
       worker(0),
@@ -34,20 +36,20 @@ class MasterImpl : public Master::Service
     {}
 
     int32_t id;
-    std::string file;
+    std::optional<std::string> file;
 
     int32_t worker;
     Status status;
   };
 
 public:
-  MasterImpl(std::vector<std::string> const &task_files)
+  // XXX split single input file into a number of map files
+  MasterImpl(std::vector<std::string> const &map_task_files,
+             int32_t reduce_num_tasks)
   {
-    for (auto const &task_file : task_files) {
-      int32_t task_id = _tasks.size() + 1;
+    spdlog::info("master: starting");
 
-      _tasks.emplace_back(task_id, task_file);
-    }
+    create_tasks(map_task_files, reduce_num_tasks);
   }
 
   grpc::Status GetConfig(grpc::ServerContext *context,
@@ -95,22 +97,52 @@ public:
 
     spdlog::info("master: task {} finished by worker {}", task_id, worker_id);
 
-    auto &task = _tasks[task_id - 1];
+    bool done = finish_worker_command(worker_command);
 
-    task.worker = 0;
-    task.status = Task::DONE;
+    if (done) {
+      spdlog::info("master: all tasks completed", task_id, worker_id);
+    } else {
+      spdlog::debug("master: {}/{} map/reduce tasks remaining",
+                    _map_num_tasks_remaining, _reduce_num_tasks_remaining);
+    }
+
+    response->set_done(done);
 
     return grpc::Status::OK;
   }
 
 private:
-  static WorkerInfo get_worker_info(int32_t worker_id)
+  void create_tasks(std::vector<std::string> const &map_task_files,
+                    int32_t reduce_num_tasks)
+  {
+    int32_t task_id = 0;
+
+    // create map tasks
+    _map_tasks.reserve(map_task_files.size());
+
+    for (auto const &task_file : map_task_files)
+      _map_tasks.emplace_back(++task_id, task_file);
+
+    _map_num_tasks = static_cast<int32_t>(_map_tasks.size());
+    _map_num_tasks_remaining = static_cast<int32_t>(_map_tasks.size());
+
+    // create reduce tasks
+    _reduce_tasks.reserve(reduce_num_tasks);
+
+    for (int32_t reduce_task = 0; reduce_task < reduce_num_tasks; ++reduce_task)
+      _reduce_tasks.emplace_back(++task_id);
+
+    _reduce_num_tasks = reduce_num_tasks;
+    _reduce_num_tasks_remaining = reduce_num_tasks;
+  }
+
+  WorkerInfo get_worker_info(int32_t worker_id) const
   {
     WorkerInfo worker_info;
 
     worker_info.set_id(worker_id);
 
-    worker_info.set_reduce_num_tasks(MR_REDUCE_NUM_TASKS);
+    worker_info.set_reduce_num_tasks(_reduce_num_tasks);
     worker_info.set_reduce_file_prefix(MR_REDUCE_FILE_PREFIX);
 
     return worker_info;
@@ -120,27 +152,72 @@ private:
   {
     WorkerCommand worker_command;
 
-    bool done = true;
+    if (_map_num_tasks_remaining > 0) {
+      worker_command = get_worker_command(WorkerCommand::MAP,
+                                          _map_tasks,
+                                          worker_id);
 
-    for (auto &task : _tasks) {
-      if (task.status == Task::TODO) {
-        task.worker = worker_id;
-        task.status = Task::DOING;
+    } else if (_reduce_num_tasks_remaining > 0) {
+      worker_command = get_worker_command(WorkerCommand::REDUCE,
+                                          _reduce_tasks,
+                                          worker_id);
 
-        worker_command.set_kind(WorkerCommand::MAP);
-        worker_command.set_task_id(task.id);
-        worker_command.set_task_file(task.file);
-
-        done = false;
-
-        break;
-      }
+    } else {
+      worker_command.set_kind(WorkerCommand::QUIT);
     }
 
-    if (done)
-      worker_command.set_kind(WorkerCommand::QUIT);
-
     return worker_command;
+  }
+
+  WorkerCommand get_worker_command(WorkerCommand::Kind task_kind,
+                                   std::vector<Task> &task_list,
+                                   int32_t worker_id)
+  {
+    WorkerCommand worker_command;
+
+    for (auto &task : task_list) {
+      if (task.status != Task::TODO)
+        continue;
+
+      task.worker = worker_id;
+      task.status = Task::DOING;
+
+      worker_command.set_kind(task_kind);
+
+      worker_command.set_task_id(task.id);
+
+      if (task.file)
+        worker_command.set_task_file(*task.file);
+
+      return worker_command;
+    }
+
+    assert(false);
+  }
+
+  bool finish_worker_command(WorkerCommand const &worker_command)
+  {
+    auto task_id = worker_command.task_id();
+
+    Task *task;
+
+    switch (worker_command.kind()) {
+      case WorkerCommand::MAP:
+        task = &_map_tasks[task_id - 1];
+        --_map_num_tasks_remaining;
+        break;
+      case WorkerCommand::REDUCE:
+        task = &_reduce_tasks[task_id - _map_num_tasks - 1];
+        --_reduce_num_tasks_remaining;
+        break;
+      default:
+        assert(false);
+    }
+
+    task->worker = 0;
+    task->status = Task::DONE;
+
+    return _map_num_tasks_remaining == 0 && _reduce_num_tasks_remaining == 0;
   }
 
   std::string describe_worker_command(WorkerCommand const &worker_command)
@@ -156,7 +233,7 @@ private:
                            << worker_command.task_file() << "']";
         break;
       case WorkerCommand::REDUCE:
-        ss << "REDUCE"; // XXX
+        ss << "REDUCE [task " << worker_command.task_id() << "]";
         break;
       case WorkerCommand::QUIT:
         ss << "QUIT";
@@ -170,7 +247,14 @@ private:
   }
 
   int32_t _workers = 0;
-  std::vector<Task> _tasks;
+
+  std::vector<Task> _map_tasks;
+  int32_t _map_num_tasks;
+  int32_t _map_num_tasks_remaining;
+
+  std::vector<Task> _reduce_tasks;
+  int32_t _reduce_num_tasks;
+  int32_t _reduce_num_tasks_remaining;
 };
 
 } // end namespace hello
@@ -187,7 +271,7 @@ int main(int argc, char **argv)
 
   std::vector<std::string> files(argv + 1, argv + argc);
 
-  MasterImpl service(files);
+  MasterImpl service(files, MR_REDUCE_NUM_TASKS);
 
   grpc::ServerBuilder builder;
 

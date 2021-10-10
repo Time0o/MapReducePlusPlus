@@ -71,15 +71,27 @@ private:
         case WorkerCommand::MAP:
           {
             map_command(command);
-            finish_command(command);
+
+            if (finish_command(command)) {
+              spdlog::info("worker {}: done", id());
+              return;
+            }
 
             continue;
           }
         case WorkerCommand::REDUCE:
-          spdlog::info("worker {}: reducing", id()); // XXX
-          break;
+          {
+            spdlog::info("worker {}: reducing", id()); // XXX
+
+            if (finish_command(command)) {
+              spdlog::info("worker {}: done", id());
+              return;
+            }
+
+            continue;
+          }
         case WorkerCommand::QUIT:
-          spdlog::info("worker {}: done", id());
+          spdlog::info("worker {}: quitting", id());
           return;
         default:
           throw std::runtime_error("unexpected command");
@@ -208,7 +220,7 @@ private:
     return response.worker_command();
   }
 
-  void finish_command(WorkerCommand const &command) const
+  bool finish_command(WorkerCommand const &command) const
   {
     FinishCommandRequest request;
     *request.mutable_worker_info() = _info;
@@ -216,6 +228,8 @@ private:
 
     FinishCommandResponse response;
     rpc("finish command", &Master::Stub::FinishCommand, request, &response);
+
+    return response.done();
   }
 
   template<typename FUNC, typename REQUEST, typename RESPONSE>

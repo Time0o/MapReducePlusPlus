@@ -44,6 +44,7 @@ message FinishCommandRequest {
 }
 
 message FinishCommandResponse {
+  bool done = 1;
 }
 
 service Master {
