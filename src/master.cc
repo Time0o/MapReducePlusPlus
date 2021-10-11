@@ -15,8 +15,12 @@
 
 #include "mr.grpc.pb.h"
 
+using namespace std::literals::chrono_literals;
+
 namespace mr
 {
+
+std::unique_ptr<grpc::Server> master_server;
 
 class MasterImpl : public Master::Service
 {
@@ -101,6 +105,9 @@ public:
 
     if (done) {
       spdlog::info("master: all tasks completed", task_id, worker_id);
+
+      remove_worker();
+
     } else {
       spdlog::debug("master: {}/{} map/reduce tasks remaining",
                     _map_num_tasks_remaining, _reduce_num_tasks_remaining);
@@ -164,6 +171,8 @@ private:
 
     } else {
       worker_command.set_kind(WorkerCommand::QUIT);
+
+      remove_worker();
     }
 
     return worker_command;
@@ -192,7 +201,9 @@ private:
       return worker_command;
     }
 
-    assert(false);
+    worker_command.set_kind(WorkerCommand::IDLE);
+
+    return worker_command;
   }
 
   bool finish_worker_command(WorkerCommand const &worker_command)
@@ -246,6 +257,21 @@ private:
     return ss.str();
   }
 
+  void remove_worker()
+  {
+    if (--_workers == 0) {
+      std::thread t {
+        [&]
+        {
+          std::this_thread::sleep_for(500ms);
+          master_server->Shutdown();
+        }
+      };
+
+      t.detach();
+    }
+  }
+
   int32_t _workers = 0;
 
   std::vector<Task> _map_tasks;
@@ -255,9 +281,10 @@ private:
   std::vector<Task> _reduce_tasks;
   int32_t _reduce_num_tasks;
   int32_t _reduce_num_tasks_remaining;
+
 };
 
-} // end namespace hello
+} // end namespace mr
 
 int main(int argc, char **argv)
 {
@@ -283,9 +310,9 @@ int main(int argc, char **argv)
 
   builder.RegisterService(&service);
 
-  std::unique_ptr<grpc::Server> server(builder.BuildAndStart());
+  master_server = std::unique_ptr<grpc::Server>(builder.BuildAndStart());
 
-  server->Wait();
+  master_server->Wait();
 
   return EXIT_SUCCESS;
 }

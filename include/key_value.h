@@ -6,9 +6,12 @@ namespace mr
 {
 
 template<typename K, typename V>
-struct KV
+struct KeyValue
 {
-  KV(K const &key, V const &value)
+  using key_type = K;
+  using value_type = V;
+
+  KeyValue(K const &key, V const &value)
   : key(key)
   , value(value)
   {}

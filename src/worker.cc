@@ -4,6 +4,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <map>
 #include <memory>
 #include <regex>
 #include <sstream>
@@ -119,7 +120,10 @@ private:
     // run map function
     std::ifstream map_stream(map_file);
 
-    auto map_gen { map(map_file, map_stream) };
+    std::stringstream map_ss;
+    map_ss << map_stream.rdbuf();
+
+    auto map_gen { map(map_file, map_ss) };
 
     // create temporary directory
     fs::path tmp_dir;
@@ -147,7 +151,7 @@ private:
 
     // create temporary reduce files
     for (int32_t reduce_task = 1; reduce_task <= reduce_num_tasks(); ++reduce_task) {
-      fs::path reduce_path { reduce_make_path(map_task, reduce_task) };
+      fs::path reduce_path { reduce_make_in_path(map_task, reduce_task) };
       fs::path reduce_tmp_path { tmp_dir / reduce_path };
 
       reduce_paths.push_back(reduce_path);
@@ -190,15 +194,43 @@ private:
     fs::remove(tmp_dir);
   }
 
+  // XXX error handling
   void reduce_command(WorkerCommand const &command) const
   {
     auto reduce_task { command.task_id() };
+    auto reduce_in_paths { reduce_glob_in_paths(reduce_task) };
 
-    auto reduce_paths { reduce_glob_paths(reduce_task) };
+    std::map<KV::key_type, std::vector<KV::value_type>> kv_map;
 
-    // XXX
-    for (auto const &reduce_path : reduce_paths)
-      spdlog::info("worker {}: reducing {}", id(), reduce_path.string());
+    for (auto const &reduce_in_path : reduce_in_paths) {
+      spdlog::info("worker {}: reducing file {}", id(), reduce_in_path.string());
+
+      std::ifstream reduce_in_stream { reduce_in_path };
+
+      std::string line;
+
+      KV::key_type key;
+      KV::value_type value;
+
+      while (std::getline(reduce_in_stream, line)) {
+        reduce_in_stream >> key >> value;
+
+        kv_map[key].push_back(value);
+      }
+    }
+
+    // XXX use temporary file here as well
+    auto reduce_out_path { reduce_make_out_path(reduce_task) };
+
+    spdlog::info("worker {}: creating output file {}", id(), reduce_out_path.string());
+
+    std::ofstream reduce_out_stream { reduce_out_path.string() };
+
+    for (auto const &[key, values] : kv_map) {
+      auto reduced_value { reduce(key, values.begin(), values.end()) };
+
+      reduce_out_stream << key << ' ' << reduced_value << '\n';
+    }
   }
 
   int32_t id() const
@@ -210,18 +242,18 @@ private:
   int32_t reduce_num_tasks() const
   { return _info.reduce_num_tasks(); }
 
-  static fs::path reduce_make_path(int32_t map_task, int32_t reduce_task)
+  static fs::path reduce_make_in_path(int32_t map_task, int32_t reduce_task)
   {
     return fmt::format(
-      "{}_{}_{}.mr", MR_REDUCE_FILE_PREFIX, map_task, reduce_task);
+      "{}_{}_{}.mr", MR_REDUCE_IN_FILE_PREFIX, map_task, reduce_task);
   }
 
-  static std::vector<fs::path> reduce_glob_paths(int32_t reduce_task)
+  static std::vector<fs::path> reduce_glob_in_paths(int32_t reduce_task)
   {
     std::vector<fs::path> reduce_paths;
 
     std::regex r(fmt::format(
-      "{}_\\d+_{}.mr", MR_REDUCE_FILE_PREFIX, reduce_task));
+      "{}_\\d+_{}.mr", MR_REDUCE_IN_FILE_PREFIX, reduce_task));
 
     for (const auto & entry : fs::directory_iterator(".")) {
       if (std::regex_match(entry.path().filename().string(), r))
@@ -229,6 +261,12 @@ private:
     }
 
     return reduce_paths;
+  }
+
+  static fs::path reduce_make_out_path(int32_t reduce_task)
+  {
+    return fmt::format(
+      "{}_{}.mr", MR_REDUCE_OUT_FILE_PREFIX, reduce_task);
   }
 
   WorkerInfo get_config() const
