@@ -5,6 +5,7 @@
 #include <fstream>
 #include <iostream>
 #include <memory>
+#include <regex>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -81,7 +82,7 @@ private:
           }
         case WorkerCommand::REDUCE:
           {
-            spdlog::info("worker {}: reducing", id()); // XXX
+            reduce_command(command);
 
             if (finish_command(command)) {
               spdlog::info("worker {}: done", id());
@@ -146,9 +147,7 @@ private:
 
     // create temporary reduce files
     for (int32_t reduce_task = 1; reduce_task <= reduce_num_tasks(); ++reduce_task) {
-      fs::path reduce_path { fmt::format(
-        "{}_{}_{}.mr", reduce_file_prefix(), map_task, reduce_task) };
-
+      fs::path reduce_path { reduce_make_path(map_task, reduce_task) };
       fs::path reduce_tmp_path { tmp_dir / reduce_path };
 
       reduce_paths.push_back(reduce_path);
@@ -165,6 +164,7 @@ private:
       std::hash<decltype(kv.key)> hasher;
       int32_t reduce_task = hasher(kv.key) % reduce_num_tasks() + 1;
 
+      // XXX properly encode
       reduce_tmp_streams[reduce_task - 1] << kv.key << ' ' << kv.value << '\n';
     }
 
@@ -190,14 +190,46 @@ private:
     fs::remove(tmp_dir);
   }
 
+  void reduce_command(WorkerCommand const &command) const
+  {
+    auto reduce_task { command.task_id() };
+
+    auto reduce_paths { reduce_glob_paths(reduce_task) };
+
+    // XXX
+    for (auto const &reduce_path : reduce_paths)
+      spdlog::info("worker {}: reducing {}", id(), reduce_path.string());
+  }
+
   int32_t id() const
   { return _info.id(); }
+
+  int32_t map_num_tasks() const
+  { return _info.map_num_tasks(); }
 
   int32_t reduce_num_tasks() const
   { return _info.reduce_num_tasks(); }
 
-  std::string reduce_file_prefix() const
-  { return _info.reduce_file_prefix(); }
+  static fs::path reduce_make_path(int32_t map_task, int32_t reduce_task)
+  {
+    return fmt::format(
+      "{}_{}_{}.mr", MR_REDUCE_FILE_PREFIX, map_task, reduce_task);
+  }
+
+  static std::vector<fs::path> reduce_glob_paths(int32_t reduce_task)
+  {
+    std::vector<fs::path> reduce_paths;
+
+    std::regex r(fmt::format(
+      "{}_\\d+_{}.mr", MR_REDUCE_FILE_PREFIX, reduce_task));
+
+    for (const auto & entry : fs::directory_iterator(".")) {
+      if (std::regex_match(entry.path().filename().string(), r))
+        reduce_paths.push_back(entry.path());
+    }
+
+    return reduce_paths;
+  }
 
   WorkerInfo get_config() const
   {

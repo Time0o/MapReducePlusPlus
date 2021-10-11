@@ -43,13 +43,13 @@ class MasterImpl : public Master::Service
   };
 
 public:
-  // XXX split single input file into a number of map files
-  MasterImpl(std::vector<std::string> const &map_task_files,
+  MasterImpl(std::vector<std::string> const &input_files,
+             int32_t map_num_tasks,
              int32_t reduce_num_tasks)
   {
     spdlog::info("master: starting");
 
-    create_tasks(map_task_files, reduce_num_tasks);
+    create_tasks(input_files, map_num_tasks, reduce_num_tasks);
   }
 
   grpc::Status GetConfig(grpc::ServerContext *context,
@@ -112,25 +112,26 @@ public:
   }
 
 private:
-  void create_tasks(std::vector<std::string> const &map_task_files,
+  void create_tasks(std::vector<std::string> const &input_files,
+                    int32_t map_num_tasks,
                     int32_t reduce_num_tasks)
   {
-    int32_t task_id = 0;
-
     // create map tasks
-    _map_tasks.reserve(map_task_files.size());
+    assert(input_files.size() == static_cast<std::size_t>(map_num_tasks)); // XXX
 
-    for (auto const &task_file : map_task_files)
-      _map_tasks.emplace_back(++task_id, task_file);
+    _map_tasks.reserve(map_num_tasks);
 
-    _map_num_tasks = static_cast<int32_t>(_map_tasks.size());
-    _map_num_tasks_remaining = static_cast<int32_t>(_map_tasks.size());
+    for (auto const &task_file : input_files)
+      _map_tasks.emplace_back(_map_tasks.size() + 1, task_file);
+
+    _map_num_tasks = map_num_tasks;
+    _map_num_tasks_remaining = map_num_tasks;
 
     // create reduce tasks
     _reduce_tasks.reserve(reduce_num_tasks);
 
     for (int32_t reduce_task = 0; reduce_task < reduce_num_tasks; ++reduce_task)
-      _reduce_tasks.emplace_back(++task_id);
+      _reduce_tasks.emplace_back(_reduce_tasks.size() + 1);
 
     _reduce_num_tasks = reduce_num_tasks;
     _reduce_num_tasks_remaining = reduce_num_tasks;
@@ -141,9 +142,8 @@ private:
     WorkerInfo worker_info;
 
     worker_info.set_id(worker_id);
-
+    worker_info.set_map_num_tasks(_map_num_tasks);
     worker_info.set_reduce_num_tasks(_reduce_num_tasks);
-    worker_info.set_reduce_file_prefix(MR_REDUCE_FILE_PREFIX);
 
     return worker_info;
   }
@@ -269,9 +269,12 @@ int main(int argc, char **argv)
     return EXIT_FAILURE;
   }
 
-  std::vector<std::string> files(argv + 1, argv + argc);
+  std::vector<std::string> input_files(argv + 1, argv + argc);
 
-  MasterImpl service(files, MR_REDUCE_NUM_TASKS);
+  int32_t map_num_tasks { static_cast<int32_t>(input_files.size()) };
+  int32_t reduce_num_tasks { MR_REDUCE_NUM_TASKS };
+
+  MasterImpl service(input_files, map_num_tasks, reduce_num_tasks);
 
   grpc::ServerBuilder builder;
 
