@@ -3,3 +3,5 @@ proto/out/*
 
 build
 
+demo/out/*
+!demo/out/.gitkeep
