@@ -72,7 +72,11 @@ private:
           break;
         case WorkerCommand::MAP:
           {
-            map_command(command);
+            try {
+              map_command(command);
+            } catch (std::exception const &e) {
+              spdlog::error("worker {}: map failed: {}", id(), e.what());
+            }
 
             if (finish_command(command)) {
               spdlog::info("worker {}: done", id());
@@ -83,7 +87,11 @@ private:
           }
         case WorkerCommand::REDUCE:
           {
-            reduce_command(command);
+            try {
+              reduce_command(command);
+            } catch (std::exception const &e) {
+              spdlog::error("worker {}: reduce failed: {}", id(), e.what());
+            }
 
             if (finish_command(command)) {
               spdlog::info("worker {}: done", id());
@@ -118,6 +126,8 @@ private:
 
     // run map function
     std::ifstream map_stream(map_file);
+    if (!map_stream)
+      throw std::runtime_error("failed to open map file");
 
     std::stringstream map_ss;
     map_ss << map_stream.rdbuf();
@@ -128,15 +138,14 @@ private:
     fs::path tmp_dir;
 
     for (;;) {
-      // XXX don't use tmpnam
-      tmp_dir = fs::temp_directory_path() / std::tmpnam(nullptr);
+      tmp_dir = fs::temp_directory_path();
 
       try {
         fs::create_directories(tmp_dir);
         break;
 
       } catch (fs::filesystem_error& e) {
-        spdlog::warn("worker {}: failed to create temporary directory: {}", id(), e.what());
+        throw std::runtime_error("failed to create temporary directory");
       }
     }
 
@@ -153,6 +162,8 @@ private:
       fs::path reduce_path { reduce_make_in_path(map_task, reduce_task) };
       fs::path reduce_tmp_path { tmp_dir / reduce_path };
 
+      spdlog::info("worker {}: creating reduce input file {}", id(), reduce_path.string());
+
       reduce_paths.push_back(reduce_path);
       reduce_tmp_paths.push_back(reduce_tmp_path);
       reduce_tmp_streams.emplace_back(reduce_tmp_path);
@@ -166,6 +177,8 @@ private:
       int32_t reduce_task = hasher(kv.key) % reduce_num_tasks() + 1;
 
       reduce_tmp_streams[reduce_task - 1] << kv.key << ' ' << kv.value << '\n';
+      if (reduce_tmp_streams[reduce_task - 1].fail())
+        throw std::runtime_error("failed to write to reduce input file");
     }
 
     // rename temporary reduce files
@@ -185,9 +198,6 @@ private:
         fs::remove(old_path);
       }
     }
-
-    // remove temporary directory
-    fs::remove(tmp_dir);
   }
 
   void reduce_command(WorkerCommand const &command) const
@@ -208,13 +218,16 @@ private:
       KV::value_type value;
 
       while (std::getline(reduce_in_stream, line)) {
-        reduce_in_stream >> key >> value;
+        std::istringstream ss { line };
+
+        ss >> key >> value;
+        if (ss.fail())
+          throw std::runtime_error("failed to read from reduce input file");
 
         kv_map[key].push_back(value);
       }
     }
 
-    // XXX use temporary file here as well
     auto reduce_out_path { reduce_make_out_path(reduce_task) };
 
     spdlog::info("worker {}: creating output file {}", id(), reduce_out_path.string());
@@ -225,6 +238,8 @@ private:
       auto reduced_value { reduce(key, values.begin(), values.end()) };
 
       reduce_out_stream << key << ' ' << reduced_value << '\n';
+      if (reduce_out_stream.fail())
+        throw std::runtime_error("failed to write to reduce output file");
     }
   }
 
