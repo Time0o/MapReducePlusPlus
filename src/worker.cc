@@ -109,7 +109,6 @@ private:
       std::chrono::milliseconds(CONFIG_WORKER_SLEEP_FOR));
   }
 
-  // XXX error handling
   void map_command(WorkerCommand const &command) const
   {
     auto map_task { command.task_id() };
@@ -160,15 +159,12 @@ private:
     }
 
     // write to temporary reduce files
-
-    // XXX properly iterate over generator
     while (map_gen.next()) {
       auto kv { map_gen.value() };
 
       std::hash<decltype(kv.key)> hasher;
       int32_t reduce_task = hasher(kv.key) % reduce_num_tasks() + 1;
 
-      // XXX properly encode
       reduce_tmp_streams[reduce_task - 1] << kv.key << ' ' << kv.value << '\n';
     }
 
@@ -194,7 +190,6 @@ private:
     fs::remove(tmp_dir);
   }
 
-  // XXX error handling
   void reduce_command(WorkerCommand const &command) const
   {
     auto reduce_task { command.task_id() };

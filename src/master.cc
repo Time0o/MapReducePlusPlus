@@ -124,8 +124,6 @@ private:
                     int32_t reduce_num_tasks)
   {
     // create map tasks
-    assert(input_files.size() == static_cast<std::size_t>(map_num_tasks)); // XXX
-
     _map_tasks.reserve(map_num_tasks);
 
     for (auto const &task_file : input_files)
